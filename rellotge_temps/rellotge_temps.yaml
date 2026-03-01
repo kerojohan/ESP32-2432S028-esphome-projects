@@ -141,20 +141,19 @@ sensor:
     filters:
       - throttle: 60s
 
-# Incluir fuentes
 font:
-  - file: "fonts/DS-DIGIT.TTF"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
     id: font_digital
     size: 48
-    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% "
-  - file: "fonts/DS-DIGIT.TTF"
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
     id: font_digital_gran
     size: 64
-    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% "
-  - file: "fonts/DS-DIGIT.TTF"
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
     id: font_digital_petit
     size: 28
-    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% "
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
 
 # Colores
 color:

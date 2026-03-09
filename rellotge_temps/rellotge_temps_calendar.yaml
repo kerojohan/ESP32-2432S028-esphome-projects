@@ -1,0 +1,415 @@
+# Configuración de pantalla horizontal
+# Muestra hora, fecha, día de la semana y valores de sensores
+
+esphome:
+  name: esp32-rellotge
+  friendly_name: Rellotge Temperatura ESP32
+  on_boot:
+    then:
+      - output.set_level:
+          id: backlight_pwm
+          level: 0.70
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Hardware related setup
+spi:
+  - id: tft
+    clk_pin: GPIO14
+    mosi_pin: GPIO13
+    miso_pin: GPIO12
+
+output:
+  - platform: ledc
+    pin: GPIO21
+    id: backlight_pwm
+    frequency: 5000 Hz
+    inverted: true
+
+globals:
+  - id: agenda_rotation_idx
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+interval:
+  - interval: 8s
+    then:
+      - lambda: |-
+          id(agenda_rotation_idx)++;
+
+display:
+  - platform: ili9xxx
+    model: ili9342
+    color_palette: 8BIT
+    spi_id: tft
+    cs_pin: GPIO15
+    dc_pin: GPIO2
+    reset_pin: GPIO4
+    invert_colors: false
+    rotation: 180
+    update_interval: 1s
+    lambda: |-
+      // Fons negre
+      it.fill(id(negre));
+
+      // Rellotge digital gran centrat (blanc)
+      auto now = id(my_time).now();
+      it.printf(it.get_width() / 2, 34, id(font_digital_gran), id(blanc), TextAlign::CENTER, "%02d:%02d:%02d", now.hour, now.minute, now.second);
+
+      // Dia i mes (mes en lletres) más pequeño
+      const char* mesos[12] = {"gener", "febrer", "març", "abril", "maig", "juny", "juliol", "agost", "setembre", "octubre", "novembre", "desembre"};
+      const char* dies[7] = {"diumenge", "dilluns", "dimarts", "dimecres", "dijous", "divendres", "dissabte"};
+      char data_mes[32];
+      snprintf(data_mes, sizeof(data_mes), "%02d %s", now.day_of_month, mesos[now.month - 1]);
+      it.printf(it.get_width() / 2, 84, id(font_digital_petit), id(blanc), TextAlign::CENTER, "%s", data_mes);
+      // Día de la semana y año juntos, centrados, en gris
+      char dia_any[32];
+      snprintf(dia_any, sizeof(dia_any), "%s %04d", dies[(now.day_of_week - 1) % 7], now.year);
+      it.printf(it.get_width() / 2, 109, id(font_digital_petit), id(gris), TextAlign::CENTER, "%s", dia_any);
+
+      // Agenda de calendario (eventos del dia / proximos) con rotacion
+      std::string notices[5];
+      int notice_colors[5];
+      int notice_count = 0;
+
+      auto is_valid_text = [&](const std::string &value) {
+        return !value.empty() && value != "unknown" && value != "unavailable" && value != "None";
+      };
+
+      auto add_notice = [&](const std::string &text, int color_id) {
+        if (!is_valid_text(text) || notice_count >= 5) {
+          return;
+        }
+        std::string clipped = text;
+        if (clipped.size() > 76) {
+          clipped = clipped.substr(0, 76);
+        }
+        notices[notice_count] = clipped;
+        notice_colors[notice_count] = color_id;
+        notice_count++;
+      };
+
+      auto add_calendar_notice = [&](const char *source, const std::string &message, const std::string &start_raw, const std::string &all_day_raw) {
+        if (!is_valid_text(message) || !is_valid_text(start_raw) || notice_count >= 5) {
+          return;
+        }
+
+        int y = 0;
+        int m = 0;
+        int d = 0;
+        int h = 0;
+        int mi = 0;
+        bool has_time = false;
+        bool parsed = false;
+
+        if (sscanf(start_raw.c_str(), "%d-%d-%d %d:%d", &y, &m, &d, &h, &mi) == 5 ||
+            sscanf(start_raw.c_str(), "%d-%d-%dT%d:%d", &y, &m, &d, &h, &mi) == 5) {
+          parsed = true;
+          has_time = true;
+        } else if (sscanf(start_raw.c_str(), "%d-%d-%d", &y, &m, &d) == 3) {
+          parsed = true;
+        }
+
+        bool is_all_day = all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on";
+        if (is_all_day) {
+          has_time = false;
+        }
+
+        if (!parsed) {
+          return;
+        }
+
+        char when[28];
+        int color_id = 0;
+        if (y == now.year && m == now.month && d == now.day_of_month) {
+          if (has_time) {
+            int delta_min = (h * 60 + mi) - (now.hour * 60 + now.minute);
+            if (delta_min >= 0 && delta_min <= 60) {
+              snprintf(when, sizeof(when), "EN %dm", delta_min);
+              color_id = 2;
+            } else if (delta_min < 0) {
+              snprintf(when, sizeof(when), "ARA");
+              color_id = 2;
+            } else {
+              snprintf(when, sizeof(when), "AVUI %02d:%02d", h, mi);
+              color_id = 1;
+            }
+          } else {
+            snprintf(when, sizeof(when), "AVUI TOT EL DIA");
+            color_id = 1;
+          }
+        } else {
+          if (has_time) {
+            snprintf(when, sizeof(when), "PROP %02d/%02d %02d:%02d", d, m, h, mi);
+          } else {
+            snprintf(when, sizeof(when), "PROP %02d/%02d", d, m);
+          }
+        }
+
+        std::string line = std::string(when) + " " + source + ": " + message;
+        add_notice(line, color_id);
+      };
+
+      add_calendar_notice("JOAN", id(calendar_joan_message).state, id(calendar_joan_start_time).state, id(calendar_joan_all_day).state);
+      add_calendar_notice("ANIV", id(calendar_birthdays_message).state, id(calendar_birthdays_start_time).state, id(calendar_birthdays_all_day).state);
+
+      // Lineas adicionales opcionales desde Home Assistant para dias con muchos eventos.
+      add_notice(id(calendar_extra_line_1).state, 0);
+      add_notice(id(calendar_extra_line_2).state, 0);
+      add_notice(id(calendar_extra_line_3).state, 0);
+
+      it.printf(it.get_width() / 2, 188, id(font_agenda_small), id(gris), TextAlign::TOP_CENTER, "AGENDA");
+      if (notice_count == 0) {
+        it.printf(it.get_width() / 2, 212, id(font_agenda), id(gris), TextAlign::CENTER, "SENSE ESDEVENIMENTS");
+        it.printf(it.get_width() / 2, 228, id(font_agenda), id(gris), TextAlign::CENTER, "AVUI");
+      } else {
+        int idx = id(agenda_rotation_idx) % notice_count;
+        Color notice_color = id(gris);
+        if (notice_colors[idx] == 1) {
+          notice_color = id(taronja);
+        } else if (notice_colors[idx] == 2) {
+          notice_color = id(vermell);
+        }
+        std::string line1 = notices[idx];
+        std::string line2 = "";
+        if (line1.size() > 28) {
+          size_t split = line1.rfind(' ', 28);
+          if (split == std::string::npos || split < 18) {
+            split = 28;
+          }
+          line2 = line1.substr(split + 1);
+          line1 = line1.substr(0, split);
+          if (line2.size() > 28) {
+            line2 = line2.substr(0, 28);
+          }
+        }
+        it.printf(it.get_width() / 2, 212, id(font_agenda), notice_color, TextAlign::CENTER, "%s", line1.c_str());
+        it.printf(it.get_width() / 2, 228, id(font_agenda), notice_color, TextAlign::CENTER, "%s", line2.c_str());
+        it.printf(it.get_width() - 8, it.get_height() - 2, id(font_agenda_small), id(gris), TextAlign::BOTTOM_RIGHT, "%d/%d", idx + 1, notice_count);
+      }
+
+      // Zona inferior: sensores con iconos BMP
+      int x_esq = 60;
+      int y_temp = 158;
+      int y_hum = 181;
+      // Icono izquierda (casa)
+      it.image(x_esq-12, y_temp-38, id(icono_interior));
+      char temp_esq[16];
+      snprintf(temp_esq, sizeof(temp_esq), "%.1fC", id(despatx_wifi_temperature_humidity_sensor_temperatura).state);
+      it.printf(x_esq, y_temp, id(font_sensor_temp), id(blanc), TextAlign::CENTER, "%s", temp_esq);
+      char hum_esq[8];
+      snprintf(hum_esq, sizeof(hum_esq), "%.0f%%", id(despatx_wifi_temperature_humidity_sensor_humitat).state);
+      it.printf(x_esq, y_hum, id(font_sensor_hum), id(gris), TextAlign::CENTER, "%s", hum_esq);
+      // Icono derecha (meteorología)
+      int x_dret = it.get_width() - 60;
+      std::string cond = id(metno_condition).state;
+      if (cond == "sunny") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_sunny));
+      } else if (cond == "partlycloudy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_partlycloudy));
+      } else if (cond == "cloudy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_cloudy));
+      } else if (cond == "rainy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_rainy));
+      } else if (cond == "pouring") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_pouring));
+      } else if (cond == "lightning") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_lightning));
+      } else if (cond == "lightning-rainy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_lightning_rainy));
+      } else if (cond == "snowy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_snowy));
+      } else if (cond == "snowy-rainy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_snowy_rainy));
+      } else if (cond == "windy") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_windy));
+      } else if (cond == "fog") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_fog));
+      } else if (cond == "hail") {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_hail));
+      } else {
+        it.image(x_dret-12, y_temp-38, id(icono_exterior_cloudy)); // icono por defecto
+      }
+      // Valores de temperatura y humedad exterior
+      char temp_dret[16];
+      snprintf(temp_dret, sizeof(temp_dret), "%.1fC", id(estacion_oregon_temperatura).state);
+      it.printf(x_dret, y_temp, id(font_sensor_temp), id(blanc), TextAlign::CENTER, "%s", temp_dret);
+      char hum_dret[8];
+      snprintf(hum_dret, sizeof(hum_dret), "%.0f%%", id(estacion_oregon_humedad).state);
+      it.printf(x_dret, y_hum, id(font_sensor_hum), id(gris), TextAlign::CENTER, "%s", hum_dret);
+
+
+# Reloj de tiempo real
+time:
+  - platform: sntp
+    id: my_time
+    timezone: Europe/Madrid
+
+# Sensores externos de Home Assistant
+sensor:
+  - platform: homeassistant
+    id: despatx_wifi_temperature_humidity_sensor_temperatura
+    entity_id: sensor.despatx_wifi_temperature_humidity_sensor_temperatura
+    filters:
+      - throttle: 60s
+  - platform: homeassistant
+    id: despatx_wifi_temperature_humidity_sensor_humitat
+    entity_id: sensor.despatx_wifi_temperature_humidity_sensor_humitat
+    filters:
+      - throttle: 60s
+  - platform: homeassistant
+    id: estacion_oregon_temperatura
+    entity_id: sensor.bth01_9e69_temperature
+    filters:
+      - throttle: 60s
+  - platform: homeassistant
+    id: estacion_oregon_humedad
+    entity_id: sensor.bth01_9e69_humidity
+    filters:
+      - throttle: 60s
+
+font:
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
+    id: font_digital
+    size: 48
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
+    id: font_digital_gran
+    size: 64
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
+    id: font_digital_petit
+    size: 28
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+  - file: "fonts/Arimo-Regular.ttf"
+    id: font_agenda
+    size: 16
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-%() çÇ"
+  - file: "fonts/Arimo-Regular.ttf"
+    id: font_agenda_small
+    size: 14
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-%() çÇ"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
+    id: font_sensor_temp
+    size: 34
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+  - file: "fonts/DS-DIGIT-MODIFIED.TTF"
+    id: font_sensor_hum
+    size: 22
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-% çÇ"
+
+# Colores
+color:
+  - id: blanc
+    hex: 'ffffff'
+  - id: negre
+    hex: '000000'
+  - id: gris
+    hex: '808080'
+  - id: taronja
+    hex: 'ffae42'
+  - id: vermell
+    hex: 'ff0000'
+
+logger:
+api:
+
+image:
+  - file: "icons/interior.bmp"
+    id: icono_interior
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_sunny.bmp"
+    id: icono_exterior_sunny
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_partlycloudy.bmp"
+    id: icono_exterior_partlycloudy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_cloudy.bmp"
+    id: icono_exterior_cloudy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_rainy.bmp"
+    id: icono_exterior_rainy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_pouring.bmp"
+    id: icono_exterior_pouring
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_lightning.bmp"
+    id: icono_exterior_lightning
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_lightning_rainy.bmp"
+    id: icono_exterior_lightning_rainy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_snowy.bmp"
+    id: icono_exterior_snowy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_snowy_rainy.bmp"
+    id: icono_exterior_snowy_rainy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_windy.bmp"
+    id: icono_exterior_windy
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_fog.bmp"
+    id: icono_exterior_fog
+    type: RGB
+    resize: 24x24
+  - file: "icons/exterior_hail.bmp"
+    id: icono_exterior_hail
+    type: RGB
+    resize: 24x24
+
+text_sensor:
+  - platform: homeassistant
+    id: metno_condition
+    entity_id: weather.forecast_home
+  - platform: homeassistant
+    id: calendar_joan_message
+    entity_id: calendar.joan
+    attribute: message
+  - platform: homeassistant
+    id: calendar_joan_start_time
+    entity_id: calendar.joan
+    attribute: start_time
+  - platform: homeassistant
+    id: calendar_joan_all_day
+    entity_id: calendar.joan
+    attribute: all_day
+  - platform: homeassistant
+    id: calendar_birthdays_message
+    entity_id: calendar.birthdays
+    attribute: message
+  - platform: homeassistant
+    id: calendar_birthdays_start_time
+    entity_id: calendar.birthdays
+    attribute: start_time
+  - platform: homeassistant
+    id: calendar_birthdays_all_day
+    entity_id: calendar.birthdays
+    attribute: all_day
+  # Opcionales: si creas estos sensores template en HA, se mostraran en rotacion.
+  - platform: homeassistant
+    id: calendar_extra_line_1
+    entity_id: sensor.rellotge_calendar_line_1
+  - platform: homeassistant
+    id: calendar_extra_line_2
+    entity_id: sensor.rellotge_calendar_line_2
+  - platform: homeassistant
+    id: calendar_extra_line_3
+    entity_id: sensor.rellotge_calendar_line_3

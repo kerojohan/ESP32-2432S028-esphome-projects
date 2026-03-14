@@ -190,8 +190,34 @@ display:
             line2 = line2.substr(0, 28);
           }
         }
-        it.printf(it.get_width() / 2, 212, id(font_agenda), notice_color, TextAlign::CENTER, "%s", line1.c_str());
-        it.printf(it.get_width() / 2, 228, id(font_agenda), notice_color, TextAlign::CENTER, "%s", line2.c_str());
+        auto render_agenda_line = [&](int y, const std::string &line) {
+          size_t aniv_pos = line.find("ANIV:");
+          if (aniv_pos == std::string::npos) {
+            it.printf(it.get_width() / 2, y, id(font_agenda), notice_color, TextAlign::CENTER, "%s", line.c_str());
+            return;
+          }
+
+          std::string prefix = line.substr(0, aniv_pos);
+          std::string suffix = line.substr(aniv_pos + 5);
+
+          int x1, y1, w_prefix, h_prefix;
+          int x2, y2, w_icon, h_icon;
+          int x3, y3, w_suffix, h_suffix;
+          it.get_text_bounds(0, 0, prefix.c_str(), id(font_agenda), TextAlign::TOP_LEFT, &x1, &y1, &w_prefix, &h_prefix);
+          it.get_text_bounds(0, 0, "\U000F00EB", id(font_agenda_icon), TextAlign::TOP_LEFT, &x2, &y2, &w_icon, &h_icon);
+          it.get_text_bounds(0, 0, suffix.c_str(), id(font_agenda), TextAlign::TOP_LEFT, &x3, &y3, &w_suffix, &h_suffix);
+
+          int spacing = 2;
+          int total_width = w_prefix + spacing + w_icon + w_suffix;
+          int start_x = (it.get_width() - total_width) / 2;
+
+          it.printf(start_x, y, id(font_agenda), notice_color, TextAlign::CENTER_LEFT, "%s", prefix.c_str());
+          it.printf(start_x + w_prefix + spacing, y, id(font_agenda_icon), id(taronja), TextAlign::CENTER_LEFT, "\U000F00EB");
+          it.printf(start_x + w_prefix + spacing + w_icon, y, id(font_agenda), notice_color, TextAlign::CENTER_LEFT, "%s", suffix.c_str());
+        };
+
+        render_agenda_line(212, line1);
+        render_agenda_line(228, line2);
         it.printf(it.get_width() - 8, it.get_height() - 2, id(font_agenda_small), id(gris), TextAlign::BOTTOM_RIGHT, "%d/%d", idx + 1, notice_count);
       }
 
@@ -291,11 +317,30 @@ font:
   - file: "fonts/Arimo-Regular.ttf"
     id: font_agenda
     size: 16
-    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-%() çÇ"
+    glyphs:
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      - "abcdefghijklmnopqrstuvwxyz"
+      - "0123456789"
+      - " "
+      - ":./-%()"
+      - "'’"
+      - "ÀÈÉÍÏÒÓÚÜÇàèéíïòóúüç·"
   - file: "fonts/Arimo-Regular.ttf"
     id: font_agenda_small
     size: 14
-    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:./-%() çÇ"
+    glyphs:
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      - "abcdefghijklmnopqrstuvwxyz"
+      - "0123456789"
+      - " "
+      - ":./-%()"
+      - "'’"
+      - "ÀÈÉÍÏÒÓÚÜÇàèéíïòóúüç·"
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_agenda_icon
+    size: 18
+    glyphs:
+      - "\U000F00EB"
   - file: "fonts/DS-DIGIT-MODIFIED.TTF"
     id: font_sensor_temp
     size: 34

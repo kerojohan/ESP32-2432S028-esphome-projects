@@ -74,31 +74,29 @@ display:
       snprintf(dia_any, sizeof(dia_any), "%s %04d", dies[(now.day_of_week - 1) % 7], now.year);
       it.printf(it.get_width() / 2, 109, id(font_digital_petit), id(gris), TextAlign::CENTER, "%s", dia_any);
 
-      // Agenda de calendario: cites del dia + propers
+      // Agenda de calendari: avui i els pròxims set dies
       auto is_valid_text = [&](const std::string &value) {
         return !value.empty() && value != "unknown" && value != "unavailable" && value != "None";
       };
 
-      std::string today_msgs[5];
-      int today_colors[5];
-      int today_n = 0;
+      std::string notices[5];
+      int notice_colors[5];
+      int notice_order[5];
+      int notice_count = 0;
 
-      std::string upcoming_msgs[5];
-      int upcoming_colors[5];
-      int upcoming_n = 0;
-
-      auto add_to_bucket = [&](std::string *msgs, int *cols, int &n, const std::string &text, int color_id) {
-        if (n >= 5) return;
-        std::string clipped = text;
-        if (clipped.size() > 76) clipped = clipped.substr(0, 76);
-        msgs[n] = clipped;
-        cols[n] = color_id;
-        n++;
+      auto days_from_civil = [](int y, int m, int d) {
+        y -= m <= 2;
+        const int era = (y >= 0 ? y : y - 399) / 400;
+        const unsigned yoe = static_cast<unsigned>(y - era * 400);
+        const unsigned doy = static_cast<unsigned>((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);
+        const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + static_cast<int>(doe);
       };
 
-      auto add_calendar_notice = [&](const char *source, const std::string &message, const std::string &start_raw, const std::string &all_day_raw) {
-        if (!is_valid_text(message) || !is_valid_text(start_raw)) return;
-        if (today_n >= 5 && upcoming_n >= 5) return;
+      const int today_day = days_from_civil(now.year, now.month, now.day_of_month);
+
+      auto add_calendar_notice = [&](const char *source, const std::string &message, const std::string &start_raw, const std::string &end_raw, const std::string &all_day_raw) {
+        if (!is_valid_text(message) || !is_valid_text(start_raw) || notice_count >= 5) return;
 
         int y = 0, m = 0, d = 0, h = 0, mi = 0;
         bool has_time = false;
@@ -112,65 +110,92 @@ display:
           parsed = true;
         }
 
-        bool is_all_day = all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on";
-        if (is_all_day) has_time = false;
-
         if (!parsed) return;
+        if (all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on") has_time = false;
 
-        char when[28];
+        int ey = 0, em = 0, ed = 0, eh = 0, emi = 0;
+        bool end_has_time = false;
+        bool end_parsed = false;
+        if (sscanf(end_raw.c_str(), "%d-%d-%d %d:%d", &ey, &em, &ed, &eh, &emi) == 5 ||
+            sscanf(end_raw.c_str(), "%d-%d-%dT%d:%d", &ey, &em, &ed, &eh, &emi) == 5) {
+          end_parsed = true;
+          end_has_time = true;
+        } else if (sscanf(end_raw.c_str(), "%d-%d-%d", &ey, &em, &ed) == 3) {
+          end_parsed = true;
+        }
+
+        int day_delta = days_from_civil(y, m, d) - today_day;
+        if (day_delta > 7) return;
+        bool ongoing = false;
+        if (day_delta < 0) {
+          if (!end_parsed) return;
+          int end_delta = days_from_civil(ey, em, ed) - today_day;
+          if (all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on") {
+            if (end_has_time && eh == 0 && emi == 0) end_delta -= 1;
+          }
+          if (end_delta < 0) return;
+          ongoing = true;
+          day_delta = 0;
+        }
+
+        char when[32];
         int color_id = 0;
-
-        if (y == now.year && m == now.month && d == now.day_of_month) {
-          if (has_time) {
+        if (day_delta == 0) {
+          color_id = 1;
+          if (ongoing) {
+            if (has_time)
+              snprintf(when, sizeof(when), "AVUI FINS %02d:%02d", eh, emi);
+            else
+              snprintf(when, sizeof(when), "AVUI TOT EL DIA");
+            color_id = 2;
+          } else if (has_time) {
             int delta_min = (h * 60 + mi) - (now.hour * 60 + now.minute);
             if (delta_min >= 0 && delta_min <= 60) {
-              snprintf(when, sizeof(when), "EN %dm", delta_min);
+              snprintf(when, sizeof(when), "D'AQUÍ %dm", delta_min);
               color_id = 2;
             } else if (delta_min < 0) {
               snprintf(when, sizeof(when), "ARA");
               color_id = 2;
             } else {
               snprintf(when, sizeof(when), "AVUI %02d:%02d", h, mi);
-              color_id = 1;
             }
           } else {
             snprintf(when, sizeof(when), "AVUI TOT EL DIA");
-            color_id = 1;
           }
-          std::string line = std::string(when) + " " + source + ": " + message;
-          add_to_bucket(today_msgs, today_colors, today_n, line, color_id);
+        } else if (day_delta == 1) {
+          if (has_time)
+            snprintf(when, sizeof(when), "DEMÀ %02d:%02d", h, mi);
+          else
+            snprintf(when, sizeof(when), "DEMÀ TOT EL DIA");
         } else {
           if (has_time)
             snprintf(when, sizeof(when), "PROP %02d/%02d %02d:%02d", d, m, h, mi);
           else
             snprintf(when, sizeof(when), "PROP %02d/%02d", d, m);
-          std::string line = std::string(when) + " " + source + ": " + message;
-          add_to_bucket(upcoming_msgs, upcoming_colors, upcoming_n, line, 0);
         }
-      };
 
-      add_calendar_notice("JOAN", id(calendar_joan_message).state, id(calendar_joan_start_time).state, id(calendar_joan_all_day).state);
-      add_calendar_notice("ANIV", id(calendar_birthdays_message).state, id(calendar_birthdays_start_time).state, id(calendar_birthdays_all_day).state);
-
-      std::string notices[5];
-      int notice_colors[5];
-      int notice_count = 0;
-
-      auto add_notice = [&](const std::string &text, int color_id) {
-        if (!is_valid_text(text) || notice_count >= 5) return;
-        std::string clipped = text;
-        if (clipped.size() > 76) clipped = clipped.substr(0, 76);
-        notices[notice_count] = clipped;
+        std::string line = std::string(when);
+        if (std::string(source) == "ANIV") line += " ANIV";
+        line += ": " + message;
+        if (line.size() > 76) line = line.substr(0, 76);
+        notices[notice_count] = line;
         notice_colors[notice_count] = color_id;
+        notice_order[notice_count] = day_delta * 1440 + (has_time ? h * 60 + mi : 0);
         notice_count++;
       };
 
-      for (int i = 0; i < today_n; i++) add_notice(today_msgs[i], today_colors[i]);
-      for (int i = 0; i < upcoming_n; i++) add_notice(upcoming_msgs[i], upcoming_colors[i]);
+      add_calendar_notice("CITA", id(calendar_joan_message).state, id(calendar_joan_start_time).state, id(calendar_joan_end_time).state, id(calendar_joan_all_day).state);
+      add_calendar_notice("ANIV", id(calendar_birthdays_message).state, id(calendar_birthdays_start_time).state, id(calendar_birthdays_end_time).state, id(calendar_birthdays_all_day).state);
 
-      add_notice(id(calendar_extra_line_1).state, 0);
-      add_notice(id(calendar_extra_line_2).state, 0);
-      add_notice(id(calendar_extra_line_3).state, 0);
+      for (int i = 0; i < notice_count - 1; i++) {
+        for (int j = i + 1; j < notice_count; j++) {
+          if (notice_order[j] < notice_order[i]) {
+            std::swap(notices[i], notices[j]);
+            std::swap(notice_colors[i], notice_colors[j]);
+            std::swap(notice_order[i], notice_order[j]);
+          }
+        }
+      }
 
       it.printf(it.get_width() / 2, 188, id(font_agenda_small), id(gris), TextAlign::TOP_CENTER, "AGENDA");
       if (notice_count == 0) {
@@ -435,6 +460,10 @@ text_sensor:
     entity_id: calendar.joan
     attribute: start_time
   - platform: homeassistant
+    id: calendar_joan_end_time
+    entity_id: calendar.joan
+    attribute: end_time
+  - platform: homeassistant
     id: calendar_joan_all_day
     entity_id: calendar.joan
     attribute: all_day
@@ -446,6 +475,10 @@ text_sensor:
     id: calendar_birthdays_start_time
     entity_id: calendar.birthdays
     attribute: start_time
+  - platform: homeassistant
+    id: calendar_birthdays_end_time
+    entity_id: calendar.birthdays
+    attribute: end_time
   - platform: homeassistant
     id: calendar_birthdays_all_day
     entity_id: calendar.birthdays

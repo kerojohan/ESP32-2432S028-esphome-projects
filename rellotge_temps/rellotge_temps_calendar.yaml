@@ -149,17 +149,17 @@ display:
             int sequence = event_day - start_day + 1;
             int event_y = 0, event_m = 0, event_d = 0;
             civil_from_days(event_day, event_y, event_m, event_d);
-            char when[40];
+            char when[16];
             if (offset == 0)
-              snprintf(when, sizeof(when), "AVUI TOT EL DIA (%d/%d)", sequence, total_days);
+              snprintf(when, sizeof(when), "AVUI");
             else if (offset == 1)
-              snprintf(when, sizeof(when), "DEMÀ TOT EL DIA (%d/%d)", sequence, total_days);
+              snprintf(when, sizeof(when), "DEMÀ");
             else
-              snprintf(when, sizeof(when), "%02d/%02d TOT EL DIA (%d/%d)", event_d, event_m, sequence, total_days);
+              snprintf(when, sizeof(when), "%02d/%02d", event_d, event_m);
 
             std::string line = std::string(when);
             if (std::string(source) == "ANIV") line += " ANIV";
-            line += ": " + message;
+            line += ": " + message + " (TOT EL DIA) (" + std::to_string(sequence) + "/" + std::to_string(total_days) + ")";
             if (line.size() > 76) line = line.substr(0, 76);
             notices[notice_count] = line;
             notice_colors[notice_count] = offset == 0 ? 1 : 0;
@@ -178,7 +178,9 @@ display:
 
         char when[32];
         if (day_delta == 0) {
-          if (ongoing && has_time)
+          if (ongoing && !has_time)
+            snprintf(when, sizeof(when), "AVUI");
+          else if (ongoing && has_time)
             snprintf(when, sizeof(when), "AVUI FINS %02d:%02d", eh, emi);
           else if (has_time) {
             int delta_min = (h * 60 + mi) - (now.hour * 60 + now.minute);
@@ -189,22 +191,23 @@ display:
             else
               snprintf(when, sizeof(when), "AVUI %02d:%02d", h, mi);
           } else
-            snprintf(when, sizeof(when), "AVUI TOT EL DIA");
+            snprintf(when, sizeof(when), "AVUI");
         } else if (day_delta == 1) {
           if (has_time)
             snprintf(when, sizeof(when), "DEMÀ %02d:%02d", h, mi);
           else
-            snprintf(when, sizeof(when), "DEMÀ TOT EL DIA");
+            snprintf(when, sizeof(when), "DEMÀ");
         } else {
           if (has_time)
-            snprintf(when, sizeof(when), "PROP %02d/%02d %02d:%02d", d, m, h, mi);
+            snprintf(when, sizeof(when), "%02d/%02d %02d:%02d", d, m, h, mi);
           else
-            snprintf(when, sizeof(when), "PROP %02d/%02d", d, m);
+            snprintf(when, sizeof(when), "%02d/%02d", d, m);
         }
 
         std::string line = std::string(when);
         if (std::string(source) == "ANIV") line += " ANIV";
         line += ": " + message;
+        if (!has_time) line += " (TOT EL DIA)";
         if (line.size() > 76) line = line.substr(0, 76);
         notices[notice_count] = line;
         notice_colors[notice_count] = day_delta == 0 ? 1 : 0;
@@ -214,6 +217,53 @@ display:
 
       add_calendar_notice("CITA", id(calendar_joan_message).state, id(calendar_joan_start_time).state, id(calendar_joan_end_time).state, id(calendar_joan_all_day).state);
       add_calendar_notice("ANIV", id(calendar_birthdays_message).state, id(calendar_birthdays_start_time).state, id(calendar_birthdays_end_time).state, id(calendar_birthdays_all_day).state);
+
+      auto add_extra_notice = [&](const std::string &text, int extra_index) {
+        if (!is_valid_text(text) || notice_count >= 5) return;
+
+        int event_d = 0, event_m = 0, event_h = 0, event_mi = 0, consumed = 0;
+        bool has_event_time = sscanf(text.c_str(), "PROP %d/%d %d:%d%n", &event_d, &event_m, &event_h, &event_mi, &consumed) == 4;
+        bool parsed_date = has_event_time;
+        if (!parsed_date) parsed_date = sscanf(text.c_str(), "PROP %d/%d%n", &event_d, &event_m, &consumed) == 2;
+
+        std::string line = text;
+        if (parsed_date) {
+          int event_day = days_from_civil(now.year, event_m, event_d);
+          if (event_day < today_day) event_day = days_from_civil(now.year + 1, event_m, event_d);
+
+          std::string message = text.substr(consumed);
+          while (!message.empty() && (message[0] == ' ' || message[0] == ':')) message.erase(0, 1);
+          if (message.rfind("JOAN: ", 0) == 0) message.erase(0, 6);
+
+          char when[24];
+          if (event_day == today_day + 1) {
+            if (has_event_time)
+              snprintf(when, sizeof(when), "DEMÀ %02d:%02d", event_h, event_mi);
+            else
+              snprintf(when, sizeof(when), "DEMÀ");
+          } else if (has_event_time) {
+            snprintf(when, sizeof(when), "%02d/%02d %02d:%02d", event_d, event_m, event_h, event_mi);
+          } else {
+            snprintf(when, sizeof(when), "%02d/%02d", event_d, event_m);
+          }
+
+          line = std::string(when) + ": " + message;
+          if (!has_event_time) line += " (TOT EL DIA)";
+        } else {
+          size_t calendar_name = line.find("JOAN: ");
+          if (calendar_name != std::string::npos) line.erase(calendar_name, 6);
+        }
+
+        if (line.size() > 76) line = line.substr(0, 76);
+        notices[notice_count] = line;
+        notice_colors[notice_count] = line.rfind("AVUI", 0) == 0 ? 1 : 0;
+        notice_order[notice_count] = 8 * 1440 + extra_index;
+        notice_count++;
+      };
+
+      add_extra_notice(id(calendar_extra_line_1).state, 0);
+      add_extra_notice(id(calendar_extra_line_2).state, 1);
+      add_extra_notice(id(calendar_extra_line_3).state, 2);
 
       for (int i = 0; i < notice_count - 1; i++) {
         for (int j = i + 1; j < notice_count; j++) {
@@ -415,6 +465,8 @@ color:
     hex: '808080'
   - id: taronja
     hex: 'ffae42'
+  # La pantalla ILI9342 intercambia físicamente los canales rojo y azul.
+  # Para mostrar rojo se usa 0000ff; para mostrar azul se usa ff0000.
   - id: vermell
     hex: '0000ff'
   - id: blau

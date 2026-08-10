@@ -93,6 +93,18 @@ display:
         return era * 146097 + static_cast<int>(doe);
       };
 
+      auto civil_from_days = [](int z, int &y, int &m, int &d) {
+        const int era = (z >= 0 ? z : z - 146096) / 146097;
+        const unsigned doe = static_cast<unsigned>(z - era * 146097);
+        const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        y = static_cast<int>(yoe) + era * 400;
+        const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        const unsigned mp = (5 * doy + 2) / 153;
+        d = doy - (153 * mp + 2) / 5 + 1;
+        m = mp + (mp < 10 ? 3 : -9);
+        y += m <= 2;
+      };
+
       const int today_day = days_from_civil(now.year, now.month, now.day_of_month);
 
       auto add_calendar_notice = [&](const char *source, const std::string &message, const std::string &start_raw, const std::string &end_raw, const std::string &all_day_raw) {
@@ -111,57 +123,73 @@ display:
         }
 
         if (!parsed) return;
-        if (all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on") has_time = false;
+        bool is_all_day = all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on";
+        if (is_all_day) has_time = false;
 
         int ey = 0, em = 0, ed = 0, eh = 0, emi = 0;
-        bool end_has_time = false;
         bool end_parsed = false;
         if (sscanf(end_raw.c_str(), "%d-%d-%d %d:%d", &ey, &em, &ed, &eh, &emi) == 5 ||
-            sscanf(end_raw.c_str(), "%d-%d-%dT%d:%d", &ey, &em, &ed, &eh, &emi) == 5) {
-          end_parsed = true;
-          end_has_time = true;
-        } else if (sscanf(end_raw.c_str(), "%d-%d-%d", &ey, &em, &ed) == 3) {
+            sscanf(end_raw.c_str(), "%d-%d-%dT%d:%d", &ey, &em, &ed, &eh, &emi) == 5 ||
+            sscanf(end_raw.c_str(), "%d-%d-%d", &ey, &em, &ed) == 3) {
           end_parsed = true;
         }
 
-        int day_delta = days_from_civil(y, m, d) - today_day;
+        const int start_day = days_from_civil(y, m, d);
+        const int end_day = end_parsed ? days_from_civil(ey, em, ed) : start_day + 1;
+        int day_delta = start_day - today_day;
         if (day_delta > 7) return;
+
+        if (is_all_day && end_parsed && end_day - start_day > 1) {
+          const int total_days = end_day - start_day;
+          int first_day = day_delta < 0 ? today_day : start_day;
+          int last_day = std::min(end_day - 1, today_day + 7);
+          int added = 0;
+          for (int event_day = first_day; event_day <= last_day && added < 3 && notice_count < 5; event_day++, added++) {
+            int offset = event_day - today_day;
+            int sequence = event_day - start_day + 1;
+            int event_y = 0, event_m = 0, event_d = 0;
+            civil_from_days(event_day, event_y, event_m, event_d);
+            char when[40];
+            if (offset == 0)
+              snprintf(when, sizeof(when), "AVUI TOT EL DIA (%d/%d)", sequence, total_days);
+            else if (offset == 1)
+              snprintf(when, sizeof(when), "DEMÀ TOT EL DIA (%d/%d)", sequence, total_days);
+            else
+              snprintf(when, sizeof(when), "%02d/%02d TOT EL DIA (%d/%d)", event_d, event_m, sequence, total_days);
+
+            std::string line = std::string(when);
+            if (std::string(source) == "ANIV") line += " ANIV";
+            line += ": " + message;
+            if (line.size() > 76) line = line.substr(0, 76);
+            notices[notice_count] = line;
+            notice_colors[notice_count] = offset == 0 ? 1 : 0;
+            notice_order[notice_count] = offset * 1440;
+            notice_count++;
+          }
+          return;
+        }
+
         bool ongoing = false;
         if (day_delta < 0) {
-          if (!end_parsed) return;
-          int end_delta = days_from_civil(ey, em, ed) - today_day;
-          if (all_day_raw == "true" || all_day_raw == "True" || all_day_raw == "on") {
-            if (end_has_time && eh == 0 && emi == 0) end_delta -= 1;
-          }
-          if (end_delta < 0) return;
+          if (!end_parsed || end_day < today_day) return;
           ongoing = true;
           day_delta = 0;
         }
 
         char when[32];
-        int color_id = 0;
         if (day_delta == 0) {
-          color_id = 1;
-          if (ongoing) {
-            if (has_time)
-              snprintf(when, sizeof(when), "AVUI FINS %02d:%02d", eh, emi);
-            else
-              snprintf(when, sizeof(when), "AVUI TOT EL DIA");
-            color_id = 2;
-          } else if (has_time) {
+          if (ongoing && has_time)
+            snprintf(when, sizeof(when), "AVUI FINS %02d:%02d", eh, emi);
+          else if (has_time) {
             int delta_min = (h * 60 + mi) - (now.hour * 60 + now.minute);
-            if (delta_min >= 0 && delta_min <= 60) {
+            if (delta_min >= 0 && delta_min <= 60)
               snprintf(when, sizeof(when), "D'AQUÍ %dm", delta_min);
-              color_id = 2;
-            } else if (delta_min < 0) {
+            else if (delta_min < 0)
               snprintf(when, sizeof(when), "ARA");
-              color_id = 2;
-            } else {
+            else
               snprintf(when, sizeof(when), "AVUI %02d:%02d", h, mi);
-            }
-          } else {
+          } else
             snprintf(when, sizeof(when), "AVUI TOT EL DIA");
-          }
         } else if (day_delta == 1) {
           if (has_time)
             snprintf(when, sizeof(when), "DEMÀ %02d:%02d", h, mi);
@@ -179,7 +207,7 @@ display:
         line += ": " + message;
         if (line.size() > 76) line = line.substr(0, 76);
         notices[notice_count] = line;
-        notice_colors[notice_count] = color_id;
+        notice_colors[notice_count] = day_delta == 0 ? 1 : 0;
         notice_order[notice_count] = day_delta * 1440 + (has_time ? h * 60 + mi : 0);
         notice_count++;
       };
@@ -205,7 +233,7 @@ display:
         int idx = id(agenda_rotation_idx) % notice_count;
         Color notice_color = id(gris);
         if (notice_colors[idx] == 1) {
-          notice_color = id(taronja);
+          notice_color = id(blau);
         } else if (notice_colors[idx] == 2) {
           notice_color = id(vermell);
         }
@@ -388,6 +416,8 @@ color:
   - id: taronja
     hex: 'ffae42'
   - id: vermell
+    hex: '0000ff'
+  - id: blau
     hex: 'ff0000'
 
 logger:
